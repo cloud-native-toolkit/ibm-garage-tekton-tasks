@@ -1,0 +1,117 @@
+apiVersion: tekton.dev/v1alpha1
+kind: Task
+metadata:
+  name: generate-helm-chart
+spec:
+  inputs:
+    resources:
+      - name: source
+        type: git
+    params:
+      - name: js-image
+        type: string
+        default: node:11-stretch
+      - name: tools-image
+        type: string
+        default: docker.io/garagecatalyst/ibmcloud-dev:1.0.8
+      - name: namespace
+        type: string
+        default: dev
+  volumes:
+    - name: helm
+      emptyDir: {}
+  steps:
+    - name: setup
+      image: ${inputs.params.js-image}
+      workingdir: ${inputs.resources.source.path}
+      env:
+        - name: PIPELINE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['tekton.dev/pipelineRun']
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          set -x
+          # Export project name, version, and build number to ./env-config
+          npm run env | grep "^npm_package_name" | sed "s/npm_package_name/IMAGE_NAME/g"  > ./env-config
+          npm run env | grep "^npm_package_version" | sed "s/npm_package_version/IMAGE_VERSION/g" >> ./env-config
+          BUILD_NUMBER=`echo $PIPELINE_ID | awk -F 'run-' '{print $NF}'`
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> ./env-config
+    - name: generate-charts
+      image: ${inputs.params.tools-image}
+      workingdir: ${inputs.resources.source.path}
+      volumeMounts:
+        - name: helm
+          mountPath: /home/devops/.helm
+      envFrom:
+        - configMapRef:
+            name: ibmcloud-config
+        - secretRef:
+            name: ibmcloud-apikey
+      env:
+        - name: HOME
+          value: /home/devops
+      command: ["/bin/bash"]
+      args:
+        - -c
+        - |
+          set -x
+
+          . ./env-config
+
+          ENVIRONMENT_NAME=${inputs.params.namespace}
+
+          export CHART_ROOT=$(find . -name chart)
+          echo $CHART_ROOT
+
+          export CHART=$(find . -name Chart\*)
+          echo $CHART
+
+          export CHART_NAME=$(cat $CHART | awk '/name:/ {print $2}')
+          echo $CHART_NAME
+
+          CHART_PATH="${CHART_ROOT}/${CHART_NAME}"
+
+          echo "KUBECONFIG=${KUBECONFIG}"
+
+          RELEASE_NAME="${IMAGE_NAME}"
+          echo "RELEASE_NAME: $RELEASE_NAME"
+
+          if [[ -n "${BUILD_NUMBER}" ]]; then
+            IMAGE_VERSION="${IMAGE_VERSION}-${BUILD_NUMBER}"
+          fi
+
+          echo "INITIALIZING helm with client-only (no Tiller)"
+          helm init --client-only 1> /dev/null 2> /dev/null
+
+          echo "CHECKING CHART (lint)"
+          helm lint ${CHART_PATH}
+
+          IMAGE_REPOSITORY="${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}"
+          PIPELINE_IMAGE_URL="${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_VERSION}"
+
+          # Update helm chart with repository and tag values
+          cat ${CHART_PATH}/values.yaml | \
+              yq w - nameOverride "${IMAGE_NAME}" | \
+              yq w - fullnameOverride "${IMAGE_NAME}" | \
+              yq w - image.repository "${IMAGE_REPOSITORY}" | \
+              yq w - image.tag "${IMAGE_VERSION}" > ./values.yaml.tmp
+          cp ./values.yaml.tmp ${CHART_PATH}/values.yaml
+          cat ${CHART_PATH}/values.yaml
+
+          # Using 'upgrade --install" for rolling updates. Note that subsequent updates will occur in the same namespace the release is currently deployed in, ignoring the explicit--namespace argument".
+          helm template ${CHART_PATH} \
+              --name ${RELEASE_NAME} \
+              --namespace ${ENVIRONMENT_NAME} \
+              --set ingress.tlsSecretName="${TLS_SECRET_NAME}" \
+              --set ingress.subdomain="${INGRESS_SUBDOMAIN}" > ./release.yaml
+
+          echo -e "Generated release yaml for: ${CLUSTER_NAME}/${ENVIRONMENT_NAME}."
+          cat ./release.yaml
+
+          echo -e "Deploying into: ${CLUSTER_NAME}/${ENVIRONMENT_NAME}."
+          kubectl apply -n ${ENVIRONMENT_NAME} -f ./release.yaml
+
+          # ${SCRIPT_ROOT}/deploy-checkstatus.sh ${ENVIRONMENT_NAME} ${IMAGE_NAME} ${IMAGE_REPOSITORY} ${IMAGE_VERSION}

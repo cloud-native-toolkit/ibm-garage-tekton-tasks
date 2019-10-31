@@ -24,10 +24,18 @@ spec:
         inputs:
           - name: source
             resource: git-source
-    - name: deploy
+    - name: generate-helm-chart
       taskRef:
-        name: deploy
+        name: generate-helm-chart
       runAfter: [build-image]
+      resources:
+        inputs:
+          - name: source
+            resource: git-source
+    - name: helm-package
+      taskRef:
+        name: helm-package
+      runAfter: [generate-helm-chart]
       resources:
         inputs:
           - name: source
@@ -35,7 +43,7 @@ spec:
     - name: health-check
       taskRef:
         name: health-check
-      runAfter: [deploy]
+      runAfter: [helm-package]
       resources:
         inputs:
           - name: source
