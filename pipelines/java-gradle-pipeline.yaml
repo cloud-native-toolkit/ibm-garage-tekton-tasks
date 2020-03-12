@@ -20,7 +20,7 @@ spec:
       taskRef:
         name: igc-build-tag-push
       runAfter:
-       - test
+        - test
       resources:
         inputs:
           - name: source
@@ -32,7 +32,7 @@ spec:
       taskRef:
         name: igc-deploy
       runAfter:
-       - build
+        - build
       resources:
         inputs:
           - name: source
@@ -43,16 +43,18 @@ spec:
       taskRef:
         name: igc-health-check
       runAfter:
-       - deploy
+        - deploy
       resources:
         inputs:
           - name: source
             resource: git-source
+          - name: image
+            resource: docker-image
     - name: package
       taskRef:
         name: igc-helm-package
       runAfter:
-       - health
+        - health
       resources:
         inputs:
           - name: source
@@ -63,7 +65,7 @@ spec:
       taskRef:
         name: igc-gitops
       runAfter:
-       - package
+        - package
       resources:
         inputs:
           - name: source
