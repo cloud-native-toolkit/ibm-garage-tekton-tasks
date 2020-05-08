@@ -1,2 +1,3 @@
 # ibm-garage-tekton-tasks
-Contains the generic Tekton Tasks for use with Tekton Pipeleins
+
+The repo has been moved to https://github.com/IBM/ibm-garage-tekton-tasks
